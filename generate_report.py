@@ -55,7 +55,7 @@ def brand_ci(df, group_cols=[], N=None, z=1.96):
             'ci_low': round(low*100, 2),
             'ci_high': round(high*100, 2),
             'moe' : round((high - low) * 100, 2)
-        })
+        })  # type: ignore
         res.append(entry)
 
     return pd.DataFrame(res)
@@ -117,7 +117,7 @@ def clean_shoes(df, probability_threshold=0.9):
             # More than 2 shoes, check for duplicates
             labels = [shoe['label'][0] for shoe in shoes]
             counts = {label: labels.count(label) for label in set(labels)}
-            most_common_label = max(counts, key=counts.get)
+            most_common_label = max(counts, key=counts.get) # type: ignore
             # If there's a tie, return the one with the highest probability
             max_prob = -1
             for shoe in shoes:
@@ -239,7 +239,8 @@ def correct_proportions(o_series: pd.Series,
     """Aplica NNLS para corrigir vetor observado (Series em %) usando matriz C."""
     from scipy.optimize import nnls
 
-    vec = o_series.reindex(brands_order, fill_value=0).values / 100
+    vec = o_series.reindex(brands_order, fill_value=0) / 100
+    vec = vec.values
     p, _ = nnls(C, vec)
     p = p / p.sum()
     return pd.Series(p * 100, index=brands_order)
@@ -292,11 +293,13 @@ if __name__ == "__main__":
                             fill_value=0)
 
     overall_ci = brand_ci(df, group_cols=[], N=N)
+    prova_ci = brand_ci(df, group_cols=["folder"], N=N)
+    gender_ci = brand_ci(df, group_cols=["gender"], N=N)
+    age_ci = brand_ci(df, group_cols=["age"], N=N)
+    overall_corr = pd.DataFrame()
     
     print("Distribuição geral:")
     print(pivot)
-
-    
     # dentro do main, após calcular overall_ci
     if args.confusion:
         C = pd.read_csv(args.confusion, index_col=0).values
@@ -315,13 +318,10 @@ if __name__ == "__main__":
         print(overall_ci)
 
         print("\nDistribuição por folder com IC:")
-        prova_ci = brand_ci(df, group_cols=["folder"], N=N)
         print(prova_ci)
         print("\nDistribuição por gênero com IC:")
-        gender_ci = brand_ci(df, group_cols=["gender"], N=N)
         print(gender_ci)
         print("\nDistribuição por idade com IC:")
-        age_ci = brand_ci(df, group_cols=["age"], N=N)
         print(age_ci)
 
     # ------------------------------------------------------------
@@ -339,22 +339,23 @@ if __name__ == "__main__":
                                 sheet_name="Geral IC",
                                 index=False)
 
-            # 3. IC por folder (pasta de fotos)
-            prova_ci.to_excel(writer,
-                            sheet_name="Folder IC",
-                            index=False)
+            if args.detailed:
+                # 3. IC por folder (pasta de fotos)
+                prova_ci.to_excel(writer,
+                                sheet_name="Folder IC",
+                                index=False)
 
-            # 4. IC por gênero
-            gender_ci.to_excel(writer,
-                            sheet_name="Gênero IC",
-                            index=False)
+                # 4. IC por gênero
+                gender_ci.to_excel(writer,
+                                sheet_name="Gênero IC",
+                                index=False)
 
-            # 5. IC por faixa etária
-            age_ci.to_excel(writer,
-                            sheet_name="Idade IC",
-                            index=False)
-            
-            # 6. Ajustado pela matriz de confusão
+                # 5. IC por faixa etária
+                age_ci.to_excel(writer,
+                                sheet_name="Idade IC",
+                                index=False)
+                
+                # 6. Ajustado pela matriz de confusão
             if args.confusion:
                 overall_corr.to_excel(writer,
                                     sheet_name="Geral Corrigido",

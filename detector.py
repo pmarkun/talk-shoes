@@ -110,7 +110,7 @@ class ShoesAIAnalyzer:
             # Se o state_dict já contém o classificador treinado, esta recriação pode não ser necessária
             # ou precisa corresponder exatamente à arquitetura usada no treinamento.
             # Assumindo que o state_dict é para o modelo inteiro, incluindo o classificador adaptado:
-            model.classifier = torch.nn.Sequential(
+            model.classifier = torch.nn.Sequential( # type: ignore
                 torch.nn.Dropout(0.3),
                 torch.nn.Linear(model.classifier.in_features, len(self. classes))
             )
@@ -120,7 +120,7 @@ class ShoesAIAnalyzer:
             # model.classifier.load_state_dict(state_dict)
             # OU, se foi salvo o modelo inteiro:
             model.load_state_dict(state_dict)
-            model.to(self.device).eval()
+            model.to(self.device).eval() # type: ignore
 
             logger.info("Modelo de classificação de calçados carregado.")
             return model
@@ -242,7 +242,8 @@ class ShoesAIAnalyzer:
         if not pil_images:
             return []
 
-        batch = torch.stack([self.classify_transform(img) for img in pil_images]).to(self.device)
+        stack = [self.classify_transform(img) for img in pil_images]
+        batch = torch.stack(stack).to(self.device) # type: ignore
 
         with torch.no_grad():
             logits = self.classify_shoes_model(batch).logits # Para ViTForImageClassification
@@ -254,7 +255,7 @@ class ShoesAIAnalyzer:
             prob_item = p_val.item()
             class_idx = i_val.item()
             
-            predicted_label = self.classes[class_idx]
+            predicted_label = self.classes[class_idx] # type: ignore
             results.append({"label": predicted_label, "prob": prob_item})
         
         return results
@@ -372,7 +373,8 @@ class ShoesAIAnalyzer:
                          'Southeast Asian', 'Indian', 'Middle Eastern']
 
         # Usa self.face_transform se for diferente, senão self.transform
-        batch = torch.stack([self.classify_transform(img["img"]) for img in face_pil_images]).to(self.device)
+        stack = [self.classify_transform(img["img"]) for img in face_pil_images] # type: ignore
+        batch = torch.stack(stack).to(self.device)
 
         with torch.no_grad():
             logits = self.classify_gender_model(batch) # (B, 18)
@@ -393,10 +395,10 @@ class ShoesAIAnalyzer:
         demographic_results = []
         for i in range(len(face_pil_images)):
             demographic_results.append({
-                "gender": {"label": gender_labels[gender_idx[i].item()], "prob": max_gender_p[i].item()},
-                "age":    {"label": age_labels[age_idx[i].item()],    "prob": max_age_p[i].item()},
-                "race":   {"label": race_labels[race_idx[i].item()],   "prob": max_race_p[i].item()},
-                "bbox":   face_pil_images[i]["box"],
+                "gender": {"label": gender_labels[int(gender_idx[i].item())], "prob": max_gender_p[i].item()},
+                "age":    {"label": age_labels[int(age_idx[i].item())],    "prob": max_age_p[i].item()},
+                "race":   {"label": race_labels[int(race_idx[i].item())],   "prob": max_race_p[i].item()},
+                "bbox":   face_pil_images[i]["box"], # type: ignore
             })
             logger.debug(f"Rosto {i+1} classificado: {demographic_results[-1]}")
         return demographic_results
@@ -415,7 +417,7 @@ class ShoesAIAnalyzer:
         """
         Processa todas as imagens, detecta calçados, classifica marcas e analisa rostos.
         """
-        confidence = self.config["settings"]["confidence"]
+        confidence = self.config["settings"]["confidence"] # type: ignore
         logger.info(f"Iniciando processamento de imagens em '{folder}', confidence={confidence}")
         folder_path = Path(folder)
         valid_ext = {".jpg", ".jpeg", ".png", ".webp"}
