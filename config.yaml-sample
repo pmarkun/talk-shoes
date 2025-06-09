@@ -1,0 +1,27 @@
+# config.yaml
+
+project:
+  name: ShoesAI
+  version: 1.0
+
+models:
+  classify_shoes_model: models/classify_shoes_model.pth
+  detect_shoes_model: models/detect_shoes_model.pt
+  detect_person_model: models/yolo11l.pt
+  classify_gender_model: models/classify_gender_model.pt
+  classify_shoes_classes: models/classify_shoes_classes.txt
+
+inference:
+  confidence_threshold: 0.6
+  device: cuda
+
+logging:
+  level: INFO
+  save_logs: true
+  log_dir: logs/
+
+settings:
+  batch_size: 8
+  confidence: 0.5
+
+gemini_api_key: <INSERT KEY>
