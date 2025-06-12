@@ -8,6 +8,7 @@ models:
   classify_shoes_model: models/classify_shoes_model.pth
   detect_shoes_model: models/detect_shoes_model.pt
   detect_person_model: models/yolo11l.pt
+  detect_bib_model: models/yolo-peito.pt
   classify_gender_model: models/classify_gender_model.pt
   classify_shoes_classes: models/classify_shoes_classes.txt
 
@@ -23,5 +24,7 @@ logging:
 settings:
   batch_size: 8
   confidence: 0.5
+  bib_categories: ["5K", "21K", "42K"]
+  bib_colours: ""
 
 gemini_api_key: <INSERT KEY>

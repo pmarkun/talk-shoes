@@ -12,6 +12,7 @@ from transformers import ViTForImageClassification
 from ultralytics import YOLO
 
 from insightface.app import FaceAnalysis
+from placa_peito import extract_run_data
 
 import yaml
 
@@ -22,7 +23,9 @@ logging.basicConfig(level=logging.INFO)
 
 class ShoesAIAnalyzer:
     def __init__(self,
-             config_path: str = 'config.yaml'):
+             config_path: str = 'config.yaml',
+             bib_categories_override: list[str] | None = None,
+             bib_colours_override: str | None = None):
         """ Inicializa o analisador com os parâmetros e carrega modelo e classes. """
         logger.info("Inicializando ShoesAIAnalyzer...")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -42,6 +45,22 @@ class ShoesAIAnalyzer:
 
         #Carrega o Detector de Pessoas
         self.detect_person_model = self._load_yolo_model(self.config["models"]["detect_person_model"])
+
+        #Carrega o Detector de Placa de Peito (Bib)
+        bib_model_path = self.config["models"].get("detect_bib_model")
+        self.detect_bib_model = self._load_yolo_model(bib_model_path) if bib_model_path else None
+
+        #Categorias e instruções de cor para corrida (opcionais)
+        self.bib_categories = (
+            bib_categories_override
+            if bib_categories_override is not None
+            else self.config.get("settings", {}).get("bib_categories", [])
+        )
+        self.bib_colours = (
+            bib_colours_override
+            if bib_colours_override is not None
+            else self.config.get("settings", {}).get("bib_colours")
+        )
 
         #Carrega o Detector de Faces
         self.detect_face_model = FaceAnalysis(name='buffalo_l', allowed_modules=['detection'], providers=['CUDAExecutionProvider', 'CPUExecutionProvider'])
@@ -237,6 +256,31 @@ class ShoesAIAnalyzer:
                     })
         return crops
 
+    def detect_bibs(self, pil_image: Image.Image) -> list[dict]:
+        """Detecta placas de peito na imagem de uma pessoa e lê seu conteúdo."""
+        if self.detect_bib_model is None:
+            return []
+
+        np_img = np.array(pil_image)
+        results = self.detect_bib_model(np_img, stream=True, verbose=False)
+
+        crops = self.crop_images(np_img, results, classes_to_crop=[0], confidence=0.3)
+        bibs = []
+        for crop in crops:
+            run_data = extract_run_data(
+                np.array(crop["img"]),
+                self.bib_categories,
+                colours=self.bib_colours,
+            )
+            bib_info = {
+                "bbox": crop["box"],
+                "confidence": crop["confidence"],
+            }
+            if isinstance(run_data, dict):
+                bib_info.update(run_data)
+            bibs.append(bib_info)
+        return bibs
+
     def classify_batch(self, pil_images: list[Image.Image]) -> list[dict]:
         """Classifica uma lista de PIL Images (crops de sapatos) em lote."""
         if not pil_images:
@@ -413,7 +457,7 @@ class ShoesAIAnalyzer:
         }
         return record
 
-    def process_images(self, folder: str) -> pd.DataFrame:
+    def process_images(self, folder: str, max_images: int | None = None) -> pd.DataFrame:
         """
         Processa todas as imagens, detecta calçados, classifica marcas e analisa rostos.
         """
@@ -424,6 +468,8 @@ class ShoesAIAnalyzer:
         
         image_files = [p for p in folder_path.rglob("*") if p.suffix.lower() in valid_ext]
         image_files.sort()
+        if max_images is not None:
+            image_files = image_files[:max_images]
         logger.info(f"Encontradas {len(image_files)} imagens para processar.")
         
         all_records_data = []
@@ -467,8 +513,11 @@ class ShoesAIAnalyzer:
                             foot["bbox"] = crop_info["box"],
                             foot["confidence"] = crop_info["confidence"]
                             shoes.append(foot)
-                            
+
+                        bibs = self.detect_bibs(person_crop["img"])
+
                         record["shoes"] = shoes
+                        record["bib"] = bibs[0] if bibs else None
                         record["demographic"] = self._pick_primary_face(
                             faces=demographic_data_list,     # your face detections
                             shoes=shoes,                     # the shoe list you just built
@@ -486,24 +535,45 @@ class ShoesAIAnalyzer:
         logger.info(f"Processamento de {len(all_records_data)} imagens concluído.")
         return pd.DataFrame(all_records_data)
 
-    def processFolder(self, folder: str) -> pd.DataFrame:
+    def processFolder(self, folder: str, max_images: int | None = None) -> pd.DataFrame:
         """
         Alias para process_images, mantendo consistência se usado externamente.
         """
         logger.info(f"Processando pasta (via processFolder alias): {folder}")
-        return self.process_images(folder)
+        return self.process_images(folder, max_images=max_images)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Análise de marcas de calçados e demografia em imagens.")
     parser.add_argument("folder", help="Pasta contendo as imagens a serem analisadas.")
     parser.add_argument("--output", default="output/processed_dataset.json", help="Pasta para salvar os resultados (dataset.json, tasks).")
+    parser.add_argument(
+        "--bib-categories",
+        help="Lista de categorias separadas por vírgula para sobrescrever o config.",
+    )
+    parser.add_argument(
+        "--bib-colours",
+        help="Texto adicional mapeando cores para categorias a ser enviado ao modelo.",
+    )
+    parser.add_argument(
+        "--max-images",
+        type=int,
+        help="Processa apenas as N primeiras imagens encontradas.",
+    )
     
     args = parser.parse_args()
 
     if args.folder:
-        analyzer = ShoesAIAnalyzer()
+        bib_cat_override = (
+            [c.strip() for c in args.bib_categories.split(",") if c.strip()]
+            if args.bib_categories
+            else None
+        )
+        analyzer = ShoesAIAnalyzer(
+            bib_categories_override=bib_cat_override,
+            bib_colours_override=args.bib_colours,
+        )
 
-        df_processed = analyzer.processFolder(args.folder)
+        df_processed = analyzer.processFolder(args.folder, max_images=args.max_images)
         # Salvar o DataFrame processado
         df_output_path = args.output
         try:
