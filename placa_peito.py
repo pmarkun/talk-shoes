@@ -5,6 +5,11 @@ from google.genai import types
 import easyocr
 import yaml
 import cv2
+import logging
+
+logging.getLogger("google_genai").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.ERROR)
+
 
 #load the configuration file
 with open("config.yaml", "r") as file:
@@ -100,7 +105,7 @@ def extract_run_data(image, category_list, colours=None):
     result = client.models.generate_content(
         model=model,
         contents=contents,
-        config=generate_content_config,
+        config=generate_content_config
     )
 
     return result.parsed

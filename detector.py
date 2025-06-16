@@ -23,9 +23,7 @@ logging.basicConfig(level=logging.INFO)
 
 class ShoesAIAnalyzer:
     def __init__(self,
-             config_path: str = 'config.yaml',
-             bib_categories_override: list[str] | None = None,
-             bib_colours_override: str | None = None):
+             config_path: str = 'config.yaml'):
         """ Inicializa o analisador com os parâmetros e carrega modelo e classes. """
         logger.info("Inicializando ShoesAIAnalyzer...")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -51,15 +49,8 @@ class ShoesAIAnalyzer:
         self.detect_bib_model = self._load_yolo_model(bib_model_path) if bib_model_path else None
 
         #Categorias e instruções de cor para corrida (opcionais)
-        self.bib_categories = (
-            bib_categories_override
-            if bib_categories_override is not None
-            else self.config.get("settings", {}).get("bib_categories", [])
-        )
-        self.bib_colours = (
-            bib_colours_override
-            if bib_colours_override is not None
-            else self.config.get("settings", {}).get("bib_colours")
+        self.bib_settings = (
+            self.config.get("settings", {}).get('bib_detect', {})
         )
 
         #Carrega o Detector de Faces
@@ -269,8 +260,8 @@ class ShoesAIAnalyzer:
         for crop in crops:
             run_data = extract_run_data(
                 np.array(crop["img"]),
-                self.bib_categories,
-                colours=self.bib_colours,
+                self.bib_settings.get("categories", []),
+                colours=self.bib_settings.get("colours", ""),
             )
             bib_info = {
                 "bbox": crop["box"],
@@ -514,7 +505,10 @@ class ShoesAIAnalyzer:
                             foot["confidence"] = crop_info["confidence"]
                             shoes.append(foot)
 
-                        bibs = self.detect_bibs(person_crop["img"])
+                        
+                        bibs = None
+                        if self.bib_settings.get("enabled", False) and self.detect_bib_model:
+                            bibs = self.detect_bibs(person_crop["img"])
 
                         record["shoes"] = shoes
                         record["bib"] = bibs[0] if bibs else None
@@ -563,15 +557,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.folder:
-        bib_cat_override = (
-            [c.strip() for c in args.bib_categories.split(",") if c.strip()]
-            if args.bib_categories
-            else None
-        )
-        analyzer = ShoesAIAnalyzer(
-            bib_categories_override=bib_cat_override,
-            bib_colours_override=args.bib_colours,
-        )
+        analyzer = ShoesAIAnalyzer()
 
         df_processed = analyzer.processFolder(args.folder, max_images=args.max_images)
         # Salvar o DataFrame processado
