@@ -470,9 +470,17 @@ class ShoesAIAnalyzer:
         }
         return record
 
-    def process_images(self, folder: str, max_images: int | None = None) -> pd.DataFrame:
+    def process_images(
+        self,
+        folder: str,
+        max_images: int | None = None,
+        skip_files: set[str] | None = None,
+        output_path: str | None = None,
+        resume_df: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
         """
         Processa todas as imagens, detecta calçados, classifica marcas e analisa rostos.
+        Permite pular arquivos já processados e salvar resultados incrementalmente.
         """
         confidence = self.config["settings"]["confidence"] # type: ignore
         logger.info(f"Iniciando processamento de imagens em '{folder}', confidence={confidence}")
@@ -484,12 +492,24 @@ class ShoesAIAnalyzer:
         if max_images is not None:
             image_files = image_files[:max_images]
         logger.info(f"Encontradas {len(image_files)} imagens para processar.")
-        
-        all_records_data = []
 
-        batch_size = 8 # Para detecção de objetos YOLO
+        # Carrega registros existentes se fornecido para retomar
+        df_full = resume_df.copy() if resume_df is not None else pd.DataFrame()
+        processed = set()
+        if not df_full.empty and "filename" in df_full.columns:
+            processed = set(df_full["filename"].astype(str).tolist())
+        if skip_files:
+            processed.update(skip_files)
+
+        all_records_data: list[dict] = []
+
+        batch_size = 8  # Para detecção de objetos YOLO
         for i in tqdm(range(0, len(image_files), batch_size), desc="Processando Lotes de Imagens"):
-            batch_image_paths = image_files[i : i + batch_size]
+            batch_image_paths = [p for p in image_files[i : i + batch_size] if str(p.relative_to(folder_path)) not in processed]
+            if not batch_image_paths:
+                continue
+
+            batch_records: list[dict] = []
             
             # Detecta e retorna os Tênis detectados em batch
             batch_detect_person_data = self.detect_person_batch(batch_image_paths)
@@ -543,21 +563,45 @@ class ShoesAIAnalyzer:
 
                         if shoes:
                             all_records_data.append(record)
+                            batch_records.append(record)
                     
                 
+
+            if batch_records:
+                batch_df = pd.DataFrame(batch_records)
+                df_full = pd.concat([df_full, batch_df], ignore_index=True)
+                processed.update(batch_df["filename"].astype(str).tolist())
+                if output_path:
+                    try:
+                        df_full.to_json(output_path, default_handler=str)
+                    except Exception as e:
+                        logger.error(f"Erro ao salvar dados parciais em {output_path}: {e}")
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
         
-        logger.info(f"Processamento de {len(all_records_data)} imagens concluído.")
-        return pd.DataFrame(all_records_data)
+        logger.info(f"Processamento de {len(df_full)} imagens concluído.")
+        return df_full
 
-    def processFolder(self, folder: str, max_images: int | None = None) -> pd.DataFrame:
+    def processFolder(
+        self,
+        folder: str,
+        max_images: int | None = None,
+        skip_files: set[str] | None = None,
+        output_path: str | None = None,
+        resume_df: pd.DataFrame | None = None,
+    ) -> pd.DataFrame:
         """
         Alias para process_images, mantendo consistência se usado externamente.
         """
         logger.info(f"Processando pasta (via processFolder alias): {folder}")
-        return self.process_images(folder, max_images=max_images)
+        return self.process_images(
+            folder,
+            max_images=max_images,
+            skip_files=skip_files,
+            output_path=output_path,
+            resume_df=resume_df,
+        )
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Análise de marcas de calçados e demografia em imagens.")
@@ -576,17 +620,39 @@ if __name__ == "__main__":
         type=int,
         help="Processa apenas as N primeiras imagens encontradas.",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Continua o processamento carregando o JSON de saída existente.",
+    )
     
     args = parser.parse_args()
 
     if args.folder:
         analyzer = ShoesAIAnalyzer()
 
-        df_processed = analyzer.processFolder(args.folder, max_images=args.max_images)
-        # Salvar o DataFrame processado
+        existing_df = None
+        skip_files: set[str] = set()
+        if args.resume and Path(args.output).is_file():
+            try:
+                existing_df = pd.read_json(args.output)
+                if "filename" in existing_df.columns:
+                    skip_files = set(existing_df["filename"].astype(str).tolist())
+                logger.info(f"Retomando processamento a partir de {len(skip_files)} registros.")
+            except Exception as e:
+                logger.error(f"Erro ao carregar JSON existente {args.output}: {e}")
+
+        df_processed = analyzer.processFolder(
+            args.folder,
+            max_images=args.max_images,
+            skip_files=skip_files,
+            output_path=args.output,
+            resume_df=existing_df,
+        )
+
         df_output_path = args.output
         try:
-            df_processed.to_json(df_output_path, default_handler=str) # default_handler para Path objects
+            df_processed.to_json(df_output_path, default_handler=str)
             logger.info(f"DataFrame processado salvo em: {df_output_path}")
         except Exception as e:
             logger.error(f"Erro ao salvar DataFrame processado em {df_output_path}: {e}")
