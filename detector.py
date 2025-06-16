@@ -13,6 +13,7 @@ from ultralytics import YOLO
 
 from insightface.app import FaceAnalysis
 from placa_peito import extract_run_data
+import uuid
 
 import yaml
 
@@ -32,7 +33,13 @@ class ShoesAIAnalyzer:
 
         # Carrega os path do config.xml
         with open(config_path, 'r') as file:
-            self.config = yaml.safe_load(file)    
+            self.config = yaml.safe_load(file)
+
+        output_cfg = self.config.get("output", {})
+        self.save_crops = output_cfg.get("save_crops", False)
+        self.output_path = Path(output_cfg.get("path", "output"))
+        self.min_confidence_cls = output_cfg.get("min_confidence", 0.5)
+        self.save_uncertain = output_cfg.get("save_uncertain", False)
 
         #Carrega o Classificador de Tênis
         self.classes = self._load_classify_shoes_classes(self.config["models"]["classify_shoes_classes"])
@@ -295,6 +302,23 @@ class ShoesAIAnalyzer:
         
         return results
 
+    def _save_shoe_crop(self, img: Image.Image, label: str, prob: float) -> None:
+        """Salva um crop classificado opcionalmente em disco."""
+        if not self.save_crops:
+            return
+        certain = prob >= self.min_confidence_cls
+        if not certain and not self.save_uncertain:
+            return
+
+        folder = "certain" if certain else "uncertain"
+        dest_dir = self.output_path / "classes" / folder / label
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        filename = dest_dir / f"crop_{uuid.uuid4().hex}.jpg"
+        try:
+            img.save(filename)
+        except Exception as e:
+            logger.error(f"Erro ao salvar crop em {filename}: {e}")
+
 
     def detect_faces(self, pil_image: Image.Image) -> list[Image.Image]:
         """Detecta rostos em uma imagem PIL e retorna uma lista de crops de rostos (PIL Images)."""
@@ -499,10 +523,11 @@ class ShoesAIAnalyzer:
                         shoes = []
                         for crop_info, classification_info in zip(shoe_crops_data, shoe_classifications):
                             foot = {}
-                            foot["label"] = classification_info["label"],
-                            foot["prob"] = classification_info.get("prob"),
-                            foot["bbox"] = crop_info["box"],
+                            foot["label"] = classification_info["label"]
+                            foot["prob"] = classification_info.get("prob")
+                            foot["bbox"] = crop_info["box"]
                             foot["confidence"] = crop_info["confidence"]
+                            self._save_shoe_crop(crop_info["img"], foot["label"], foot["prob"])
                             shoes.append(foot)
 
                         
