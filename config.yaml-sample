@@ -17,7 +17,7 @@ inference:
   device: cuda
 
 logging:
-  level: INFO
+  level: ERROR
   save_logs: true
   log_dir: logs/
 
