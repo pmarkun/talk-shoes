@@ -395,9 +395,7 @@ class ShoesAIAnalyzer:
 
         # Average centre‑x of all shoe bboxes (falls back to runner centre if none)
         if shoes:
-            scx = sum((sx1 + sx2) / 2 for s in shoes for sx1, _, sx2, _ in s["bbox"]) / len(
-                [b for s in shoes for b in s["bbox"]]
-            )
+            scx = sum((sx1 + sx2) / 2 for s in shoes for sx1, _, sx2, _ in [s["bbox"]]) / len(shoes)
         else:
             scx = pcx
 
