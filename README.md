@@ -42,11 +42,13 @@ Certifique-se de ter o Python 3.8+ instalado. As dependências podem ser instala
    - `vit16_shoesclassify.pth`: Modelo ViT para classificação.
    - `vit16_shoesclassify.txt`: Arquivo com as classes do modelo ViT.
 
-2. Execute o aplicativo Streamlit:
+2. Para gerenciar tarefas em lote use `web_app.py`:
 
-    streamlit run app.py
+    streamlit run web_app.py
 
-3. Acesse o aplicativo no navegador em `http://localhost:8501`.
+   Isso abrirá uma interface para configurar o `config.yaml`, adicionar pastas à fila de processamento e acompanhar o andamento.
+
+3. A versão de demonstração simples continua disponível em `app.py` caso deseje apenas testar a detecção interativamente.
 
 ## Funcionalidades
 

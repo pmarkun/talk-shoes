@@ -14,6 +14,7 @@ from ultralytics import YOLO
 from insightface.app import FaceAnalysis
 from placa_peito import extract_run_data
 import uuid
+import threading
 
 import yaml
 
@@ -477,6 +478,7 @@ class ShoesAIAnalyzer:
         skip_files: set[str] | None = None,
         output_path: str | None = None,
         resume_df: pd.DataFrame | None = None,
+        cancel_event: 'threading.Event | None' = None,
     ) -> pd.DataFrame:
         """
         Processa todas as imagens, detecta calçados, classifica marcas e analisa rostos.
@@ -505,6 +507,9 @@ class ShoesAIAnalyzer:
 
         batch_size = 8  # Para detecção de objetos YOLO
         for i in tqdm(range(0, len(image_files), batch_size), desc="Processando Lotes de Imagens"):
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("Processamento cancelado pelo usuário.")
+                break
             batch_image_paths = [p for p in image_files[i : i + batch_size] if str(p.relative_to(folder_path)) not in processed]
             if not batch_image_paths:
                 continue
@@ -516,6 +521,9 @@ class ShoesAIAnalyzer:
 
             # Processa cada imagem do lote individualmente para demais etapas
             for image_path, img_array, yolo_results_list in batch_detect_person_data:
+                if cancel_event is not None and cancel_event.is_set():
+                    logger.info("Cancelamento solicitado - interrompendo o processamento do lote atual.")
+                    break
                 if img_array is None: # Imagem falhou ao carregar
                     logger.warning(f"Pulando processamento adicional para imagem com falha na leitura: {image_path}")
                     continue
@@ -579,6 +587,10 @@ class ShoesAIAnalyzer:
 
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
+
+            if cancel_event is not None and cancel_event.is_set():
+                logger.info("Processamento cancelado durante o lote.")
+                break
         
         logger.info(f"Processamento de {len(df_full)} imagens concluído.")
         return df_full
@@ -590,6 +602,7 @@ class ShoesAIAnalyzer:
         skip_files: set[str] | None = None,
         output_path: str | None = None,
         resume_df: pd.DataFrame | None = None,
+        cancel_event: 'threading.Event | None' = None,
     ) -> pd.DataFrame:
         """
         Alias para process_images, mantendo consistência se usado externamente.
@@ -601,6 +614,7 @@ class ShoesAIAnalyzer:
             skip_files=skip_files,
             output_path=output_path,
             resume_df=resume_df,
+            cancel_event=cancel_event,
         )
 
 if __name__ == "__main__":
