@@ -551,8 +551,12 @@ class ShoesAIAnalyzer:
                         
                         bibs = None
                         if self.bib_settings.get("enabled", False) and self.detect_bib_model:
-                            bibs = self.detect_bibs(person_crop["img"])
-
+                            try:
+                                bibs = self.detect_bibs(person_crop["img"])
+                            except:
+                                from time import sleep
+                                sleep(1) # Espera um pouco para evitar problemas de concorrência com o modelo YOLO
+                                bibs = self.detect_bibs(person_crop["img"])
                         record["shoes"] = shoes
                         record["bib"] = bibs[0] if bibs else None
                         record["demographic"] = self._pick_primary_face(
