@@ -312,7 +312,8 @@ class ShoesAIAnalyzer:
             return
 
         folder = "certain" if certain else "uncertain"
-        dest_dir = self.output_path / "classes" / folder / label
+        output_path = Path(self.output_path).expanduser()
+        dest_dir = output_path / "classes" / folder / label
         dest_dir.mkdir(parents=True, exist_ok=True)
         filename = dest_dir / f"crop_{uuid.uuid4().hex}.jpg"
         try:
