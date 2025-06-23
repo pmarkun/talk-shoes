@@ -511,7 +511,7 @@ class ShoesAIAnalyzer:
 
             batch_records: list[dict] = []
             
-            # Detecta e retorna os Tênis detectados em batch
+            # Detecta e retorna as pessoas detectados em batch
             batch_detect_person_data = self.detect_person_batch(batch_image_paths)
 
             # Processa cada imagem do lote individualmente para demais etapas
