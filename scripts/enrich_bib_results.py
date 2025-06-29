@@ -1,216 +1,135 @@
 import json
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any, Dict, List, Optional
+import sys
 
-import cv2
-from ultralytics import YOLO
-
-import yaml
-from tqdm import tqdm
-
+#append parent directory to sys.path to import placa_peito
+sys.path.append(str(Path(__file__).resolve().parent.parent))
+from detector import ShoesAIAnalyzer
 from placa_peito import extract_run_data
+import json
+from PIL import Image
+import numpy as np
+from tqdm import tqdm
+#import multithreading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
+from time import sleep
+
+DEBUG = False 
+client = ShoesAIAnalyzer(config_path="config.yaml")
+
+base_path = Path("/home/markun/devel/storage/olympikus/prova_poa/")
 
 
-def detect_bib_data(
-    img: "cv2.Mat",
-    model: YOLO,
-    categories: List[str],
-    colours: Optional[str] = None,
-    conf: float = 0.3,
-) -> List[Dict[str, Any]]:
-    """Detect bibs on an image and extract run data."""
-    results = model(img, conf=conf, verbose=False)
-    det = results[0]
-    if not hasattr(det, "boxes") or det.boxes is None:
-        return []
-    boxes = det.boxes.xyxy.cpu().numpy()
-    scores = det.boxes.conf.cpu().numpy()
-    bibs = []
-    for (x1, y1, x2, y2), score in zip(boxes, scores):
-        if score < conf:
+data = json.load(open("output/processed_dataset_logical.json", "r"))
+
+
+
+def crop_person_image(entry):
+    filename = base_path / entry["filename"]
+    #crop the image to the bounding box in ["demograhics"]["bbox"]
+    bbox = entry["bbox"]
+    #load the image
+    person_img = Image.open(filename)
+    # crop the image
+    person_img = person_img.crop((bbox[0], bbox[1], bbox[2], bbox[3]))
+    return person_img
+
+def crop_bib_number(person_img, yolo_results):
+        """
+        Detects the bib number in the given image using YOLO results.
+        Yields cropped images of detected bib numbers.
+        """
+        if not yolo_results:
+            return
+        for r in yolo_results: # r é um ultralytics.engine.results.Results object
+                if r is None or r.boxes is None: # Adicionado para segurança
+                    continue
+                for box in r.boxes:
+                    x1, y1, x2, y2 = map(int, box.xyxy[0])
+                    conf = float(box.conf[0])
+                    cls = int(box.cls[0])
+                    if cls == 0 and conf >= 0.5:
+                        #Check if the box is valid
+                        if x1 >= x2 or y1 >= y2:
+                            continue
+                        if x1 < 0 or y1 < 0 or x2 > person_img.size[0] or y2 > person_img.size[1]:
+                            continue
+                        
+                        crop_pil = person_img.crop((x1, y1, x2, y2))
+                        
+                        if DEBUG:
+                            crop_filename = f"tmp/{entry['filename'].split('/')[-1].replace('.jpg', '')}_crop_{i}.jpg"
+                            crop_pil.save(crop_filename)
+                        
+                        #yield result
+                        crop = {
+                            "img": crop_pil,
+                            "box": (x1, y1, x2, y2),
+                            "confidence": conf, # Adiciona confiança da detecção
+                            "class_detection": cls       # Adiciona classe da detecção YOLO
+                        }
+
+                        yield crop
+
+def process_crop(crop, categories, prompt, entry_copy):
+    """Process a single crop and return the result with entry data"""
+    try:
+        result = extract_run_data(np.array(crop["img"]), categories, prompt)
+        entry_copy["bib"] = result
+        return entry_copy
+    except Exception as e:
+        sleep(3)
+        try:
+            result = extract_run_data(np.array(crop["img"]), categories, prompt)
+            entry_copy["bib"] = result
+        except Exception as e:
+            print(f"Error processing crop: {e}")
+            return None
+        
+bibs_data = []
+max_workers = 8  # Adjust based on your system and API limits
+output_file = Path("output/bibs_data_progressive.json")
+already_processed = {}
+if output_file.is_file():
+    with open(output_file, 'r') as f:
+        bibs_data = json.load(f)
+        already_processed = {entry['filename']: entry["bbox"] for entry in bibs_data}
+
+
+with ThreadPoolExecutor(max_workers=max_workers) as executor:
+    # Submit all tasks
+    future_to_entry = {}
+    
+    for i, entry in enumerate(tqdm(data)):
+        if entry["filename"] in already_processed and already_processed[entry["filename"]] == entry["bbox"]:
+            if DEBUG:
+                print(f"Skipping already processed entry: {entry['filename']}")
             continue
-        crop = img[int(y1) : int(y2), int(x1) : int(x2)]
-        try:
-            data = extract_run_data(crop, categories, colours=colours)
-        except Exception as exc:  # pragma: no cover - gemini may fail
-            data = {"error": str(exc)}
-        bib_info = {
-            "bbox": [int(x1), int(y1), int(x2), int(y2)],
-            "confidence": float(score),
-        }
-        if isinstance(data, dict):
-            bib_info.update(data)
-        bibs.append(bib_info)
-    return bibs
+        person_img = crop_person_image(entry)
 
-
-def load_config() -> Dict[str, Any]:
-    """Loads configuration from config.yaml or config.yaml-sample."""
-    cfg_path = Path("config.yaml")
-    if not cfg_path.is_file():
-        cfg_path = Path("config.yaml-sample")
-    if cfg_path.is_file():
-        with open(cfg_path, "r", encoding="utf-8") as fh:
-            return yaml.safe_load(fh)
-    return {}
-
-
-def load_json(path: Path) -> List[Dict[str, Any]]:
-    with open(path, "r", encoding="utf-8") as fh:
-        data = json.load(fh)
-    if isinstance(data, list):
-        return data
-    raise ValueError("JSON de entrada deve ser uma lista de objetos")
-
-
-def save_json(path: Path, data: List[Dict[str, Any]]) -> None:
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(data, fh, ensure_ascii=False, indent=2)
-
-
-def process_item(
-    item: Dict[str, Any],
-    base_path: Path,
-    model: YOLO,
-    categories: List[str],
-    colours: Optional[str],
-    max_retries: int,
-    error_dir: Optional[Path],
-    verbose: bool = False,
-) -> Dict[str, Any]:
-    image_path = item.get("image")
-    if not image_path:
-        item["error"] = "caminho da imagem ausente"
-        return item
-
-    if item.get("number") and item.get("category"):
-        # já processado
-        return item
-
-    img_path = base_path / image_path
-    if not img_path.is_file():
-        item["error"] = "imagem nao encontrada"
-        return item
-
-    img = cv2.imread(str(img_path))
-    if img is None:
-        item["error"] = "falha ao abrir imagem"
-        return item
-
-    attempt = 0
-    last_err: str | None = None
-    while attempt < max_retries:
-        try:
-            bibs = detect_bib_data(img, model, categories, colours=colours)
-            if verbose:
-                print(f"[INFO] {image_path}: {len(bibs)} bib(s) detectados")
-            if bibs:
-                item.update({
-                    "number": bibs[0].get("number"),
-                    "category": bibs[0].get("category"),
-                })
-                item["bib"] = bibs[0]
-            return item
-        except Exception as e:  # noqa: BLE001
-            last_err = str(e)
-            attempt += 1
-    item["error"] = last_err or "erro desconhecido"
-    if error_dir:
-        error_dir.mkdir(parents=True, exist_ok=True)
-        error_img = error_dir / f"{img_path.stem}_error.jpg"
-        cv2.imwrite(str(error_img), img)
-        with open(error_dir / "errors.log", "a", encoding="utf-8") as fh:
-            fh.write(f"{img_path}: {item['error']}\n")
-    return item
-
-
-def main(
-    input_json: str,
-    output_json: str,
-    base_path: Path,
-    max_workers: int = 4,
-    max_retries: int = 3,
-    error_log: bool = False,
-    test: int | None = None,
-    verbose: bool = False,
-) -> None:
-    cfg = load_config()
-    settings = cfg.get("settings", {})
-    categories = settings.get("bib_categories", [])
-    colours = settings.get("bib_colours")
-    bib_model_path = cfg.get("models", {}).get("detect_bib_model")
-    if not bib_model_path:
-        raise ValueError("Caminho do modelo de bib nao definido no config")
-    bib_model = YOLO(bib_model_path)
-
-    data = load_json(Path(input_json))
-    if test:
-        data = data[:test]
-    resume_data: List[Dict[str, Any]] = []
-    if Path(output_json).is_file():
-        resume_data = load_json(Path(output_json))
-        processed_ids = {
-            item.get("image") for item in resume_data if item.get("number")
-        }
-    else:
-        processed_ids = set()
-
-    to_process = [item for item in data if item.get("image") not in processed_ids]
-
-    error_dir = Path("error_logs") if error_log else None
-
-    results: List[Dict[str, Any]] = []
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        futures = [
-            executor.submit(
-                process_item,
-                item,
-                base_path,
-                bib_model,
-                categories,
-                colours,
-                max_retries,
-                error_dir,
-                verbose,
+        yolo_results = client.detect_bib_model(person_img, verbose=False)  
+        for crop in crop_bib_number(person_img, yolo_results):
+            # Create a copy of entry for each crop to avoid race conditions
+            entry_copy = entry.copy()
+            
+            # Submit the task to the thread pool
+            future = executor.submit(
+                process_crop, 
+                crop, 
+                ["5K", "10K", "21K", "42K"], 
+                "10K -> Laranja, 21K -> Azul, 42K -> Preta ou Vermelha (desafio 21+42)",
+                entry_copy
             )
-            for item in to_process
-        ]
-        for fut in tqdm(as_completed(futures), total=len(futures), desc="Processando"):
-            result = fut.result()
-            resume_data.append(result)
-            save_json(Path(output_json), resume_data)
-            results.append(result)
-
-    success = sum(1 for it in resume_data if it.get("number"))
-    failures = len(resume_data) - success
-    print("\nResumo:")
-    print(f"Total processado: {len(resume_data)}")
-    print(f"Com número detectado: {success}")
-    print(f"Falhas: {failures}")
-
-
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Enriquece JSON de provas com info da placa de peito")
-    parser.add_argument("input", help="Arquivo JSON de entrada")
-    parser.add_argument("output", help="Arquivo JSON de saída")
-    parser.add_argument("--workers", type=int, default=4, help="Número de threads")
-    parser.add_argument("--retries", type=int, default=3, help="Tentativas em caso de erro")
-    parser.add_argument("--log-errors", action="store_true", help="Salvar imagens e mensagens de erro")
-    parser.add_argument("--base-path", type=Path, default=Path('.'), help="Diretório base das imagens")
-    parser.add_argument("--test", type=int, default=None, help="Processa apenas N itens")
-    parser.add_argument("--verbose", action="store_true", help="Mostra operações detalhadas")
-
-    args = parser.parse_args()
-    main(
-        args.input,
-        args.output,
-        args.base_path,
-        args.workers,
-        args.retries,
-        args.log_errors,
-        args.test,
-        args.verbose,
-    )
+            future_to_entry[future] = entry_copy
+    
+    futures_list = list(future_to_entry.keys())
+    # Collect results as they complete
+    for future in tqdm(as_completed(futures_list), total=len(futures_list)):
+        result = future.result()
+        if result is not None:
+            if DEBUG:
+                print(f"Filename: {result['filename']} -> Category: {result['bib'].get('category','Não encontrado')}, Number: {result['bib'].get('number', 'Não encontrado')}")
+            bibs_data.append(result)
+            with open(output_file, 'w') as f:
+                json.dump(bibs_data, f, indent=2, ensure_ascii=False)
